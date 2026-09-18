@@ -1,0 +1,35 @@
+# Whisper model dosyaları (büyük, tekrar indirilebilir)
+models/
+*.bin
+*.pt
+
+# Ses kayıtları ve transkript çıktıları (src/output/ kaynak kodunu değil,
+# yalnızca kök dizindeki çıktı klasörünü hariç tutar)
+/output/
+*.wav
+*.mp3
+*.srt
+*.txt
+!README.md
+!requirements.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Derlenen yardımcılar ve çalışma zamanı dosyaları
+tools/audio_route
+.toggle_trigger
+
+# Ortam değişkenleri (HF_TOKEN gibi sırlar)
+.env
+
+# Editör / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

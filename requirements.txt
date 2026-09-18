@@ -1,0 +1,16 @@
+# Yerel konuşma-metin (offline, CTranslate2 tabanlı)
+faster-whisper>=1.0.0
+
+# Ses yakalama
+sounddevice>=0.4.6        # macOS / Linux loopback (ve genel ses I/O)
+soundcard>=0.4.3          # Windows WASAPI loopback
+
+# Ses verisi işleme / WAV yazma
+numpy>=1.24
+soundfile>=0.12.1
+
+# macOS menü çubuğu uygulaması
+rumps>=0.4.0 ; sys_platform == "darwin"
+
+# (opsiyonel) CLI güzelleştirme
+# rich>=13.0
