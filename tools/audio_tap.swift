@@ -6,7 +6,10 @@
 //   stderr ilk satır: {"samplerate": 48000, "channels": 2}
 //   stdout: float32 little-endian interleaved örnekler
 //   SIGTERM / SIGINT ya da stdin kapanınca (üst süreç öldü) temizleyip çıkar.
-//   Çıkış kodları: 0 normal, 77 tap oluşturulamadı (izin), 1 diğer hatalar.
+//   Varsayılan ses çıkışı değişince (ör. AirPods takıldı) temizleyip 75 ile çıkar;
+//   üst süreç yardımcıyı yeni cihazla yeniden başlatır.
+//   Çıkış kodları: 0 normal, 75 çıkış cihazı değişti, 77 tap oluşturulamadı (izin),
+//   1 diğer hatalar.
 //
 // macOS 14.4+ gerekir. Derleme:
 //   swiftc -O -target arm64-apple-macos14.4 tools/audio_tap.swift -o tools/audio_tap
@@ -60,6 +63,13 @@ var format = AudioStreamBasicDescription()
 guard getProperty(tapID, kAudioTapPropertyFormat, &format) == noErr else {
     AudioHardwareDestroyProcessTap(tapID)
     fail("tap ses formatı okunamadı", code: 1)
+}
+// Protokol float32 PCM sözü veriyor; başka bir format gelirse sessizce çöp üretme
+guard format.mFormatID == kAudioFormatLinearPCM,
+      format.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+      format.mBitsPerChannel == 32 else {
+    AudioHardwareDestroyProcessTap(tapID)
+    fail("beklenmeyen tap formatı (id \(format.mFormatID), flags \(format.mFormatFlags), \(format.mBitsPerChannel) bit)", code: 1)
 }
 
 // 3) Tap'i içeren özel (private) aggregate cihaz
@@ -122,13 +132,26 @@ func cleanup() {
     fflush(stdout)
 }
 
-let header = "{\"samplerate\": \(Int(format.mSampleRate)), \"channels\": \(channels)}\n"
-FileHandle.standardError.write(header.data(using: .utf8)!)
-
 let startStatus = AudioDeviceStart(aggregateID, ioProc)
 guard startStatus == noErr else {
     cleanup()
     fail("kayıt başlatılamadı (OSStatus \(startStatus))", code: 1)
+}
+
+// Başlık yalnızca kayıt gerçekten başladıktan sonra: üst süreç başlığı "kayıt başladı" sayar
+let header = "{\"samplerate\": \(Int(format.mSampleRate)), \"channels\": \(channels)}\n"
+FileHandle.standardError.write(header.data(using: .utf8)!)
+
+// Varsayılan çıkış cihazı değişirse aggregate cihaz eski cihaza bağlı kalır: çık, yeniden başlatılalım
+var defaultOutputAddress = AudioObjectPropertyAddress(
+    mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+    mScope: kAudioObjectPropertyScopeGlobal,
+    mElement: kAudioObjectPropertyElementMain
+)
+AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &defaultOutputAddress, .main) { _, _ in
+    FileHandle.standardError.write("audio_tap: varsayılan ses çıkışı değişti\n".data(using: .utf8)!)
+    cleanup()
+    exit(75)
 }
 
 // 5) Durdurma sinyalleri ve üst süreç ölümü (stdin EOF)

@@ -134,3 +134,93 @@ def test_stop_without_start_raises(tmp_path):
     helper = _fake_helper(tmp_path, "header(16000, 1)\n")
     with pytest.raises(RuntimeError):
         MacOSCapture(helper=helper).stop()
+
+
+def _counting_helper(tmp_path, body: str):
+    """Her çalıştırmada artan bir sayaç (run) ile sahte yardımcı."""
+    counter = tmp_path / "runs"
+    counter.write_text("0")
+    prelude = (
+        "import pathlib\n"
+        f"_c = pathlib.Path({str(counter)!r})\n"
+        "run = int(_c.read_text()) + 1\n"
+        "_c.write_text(str(run))\n"
+    )
+    return _fake_helper(tmp_path, prelude + textwrap.dedent(body))
+
+
+def test_helper_exit_mid_recording_restarts_and_continues(tmp_path):
+    # Review #3: ses çıkışı değişince (AirPods) ya da yardımcı çökünce kayıt kesilmemeli
+    helper = _counting_helper(
+        tmp_path,
+        """
+        header(16000, 1)
+        if run == 1:
+            out.write(struct.pack('<f', 0.1) * 300); out.flush()
+            sys.exit(75)
+        out.write(struct.pack('<f', 0.3) * 200); out.flush()
+        while True: time.sleep(0.05)
+        """,
+    )
+    capture = MacOSCapture(helper=helper)
+    audio = _record(capture, seconds=1.0)
+    assert audio.shape == (500,)
+    assert np.allclose(audio[:300], 0.1)
+    assert np.allclose(audio[300:], 0.3)
+
+
+def test_restart_with_different_samplerate_is_resampled(tmp_path):
+    helper = _counting_helper(
+        tmp_path,
+        """
+        if run == 1:
+            header(16000, 1)
+            out.write(struct.pack('<f', 0.1) * 1600); out.flush()
+            sys.exit(75)
+        header(8000, 1)
+        out.write(struct.pack('<f', 0.3) * 800); out.flush()
+        while True: time.sleep(0.05)
+        """,
+    )
+    capture = MacOSCapture(helper=helper)
+    audio = _record(capture, seconds=1.0)
+    assert capture.samplerate == 16000
+    assert audio.shape == (3200,)
+    assert np.allclose(audio[1600:], 0.3)
+
+
+def test_restart_keeps_failing_reports_interruption(tmp_path, monkeypatch):
+    import src.audio.capture_macos as cm
+
+    monkeypatch.setattr(cm, "_RESTART_DELAY", 0.01)
+    helper = _counting_helper(
+        tmp_path,
+        """
+        if run > 1:
+            sys.exit(1)
+        header(16000, 1)
+        out.write(struct.pack('<f', 0.2) * 400); out.flush()
+        sys.exit(75)
+        """,
+    )
+    capture = MacOSCapture(helper=helper)
+    interrupted = []
+    capture.on_interrupted = lambda: interrupted.append(True)
+    capture.start()
+    deadline = time.monotonic() + 10
+    while not interrupted and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert interrupted == [True]
+    audio = capture.stop()
+    assert audio.shape == (400,)
+
+
+def test_header_timeout_raises_instead_of_hanging(tmp_path, monkeypatch):
+    import src.audio.capture_macos as cm
+
+    monkeypatch.setattr(cm, "_HEADER_TIMEOUT", 0.5)
+    helper = _fake_helper(tmp_path, "while True: time.sleep(0.05)\n")
+    started = time.monotonic()
+    with pytest.raises(RuntimeError):
+        MacOSCapture(helper=helper).start()
+    assert time.monotonic() - started < 3
