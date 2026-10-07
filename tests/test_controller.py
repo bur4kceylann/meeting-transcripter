@@ -21,6 +21,7 @@ class FakeCapture:
         self.audio = audio
         self.start_error = start_error
         self.started = False
+        self.on_interrupted = None
 
     def start(self):
         if self.start_error:
@@ -116,6 +117,7 @@ def env(tmp_path):
             engine_factory=engine_factory,
             model_manager=e.models,
             output_dir=tmp_path / "out",
+            fallback_dir=tmp_path / "fallback",
             listener=e.listener,
             silence_hint="İpucu.",
             run_in_background=e.runner,
@@ -201,15 +203,63 @@ def test_full_flow_writes_outputs_and_notifies(env):
     assert progresses == [0.0, 0.5, 1.0]
 
 
-def test_engine_loaded_once(env):
+def test_engine_released_after_each_transcription(env):
+    # ~1.5 GB'lık model oturum açılışında başlayan uygulamada bütün gün bellekte kalmasın
     c = env.make()
     c.start()
     for _ in range(2):
         c.toggle()
         c.toggle()
         env.runner.run_all()
-    assert len(env.engine_dirs) == 1
-    assert len(env.engine.calls) == 2
+    assert len(env.engine_dirs) == 2
+
+
+def test_capture_interruption_saves_and_transcribes(env):
+    c = env.make()
+    c.start()
+    c.toggle()
+    assert env.capture.on_interrupted is not None
+    env.capture.on_interrupted()  # okuma thread'inden gelir
+    env.runner.run_all()
+    assert c.state.phase is Phase.IDLE
+    assert list((env.tmp / "out").glob("*.txt"))
+    assert any(t == "Kayıt kesildi" for t, _ in env.listener.messages)
+
+
+def test_interruption_after_user_stopped_is_ignored(env):
+    c = env.make()
+    c.start()
+    c.toggle()
+    env.capture.on_interrupted()
+    c.toggle()  # kullanıcı aynı anda durdurdu
+    env.runner.run_all()
+    assert len(env.engine.calls) == 1
+    assert len(list((env.tmp / "out").glob("*.wav"))) == 1
+
+
+def test_wav_write_failure_falls_back_to_app_folder(env):
+    # Review #1: Belgeler'e yazılamazsa (izin yok / disk) kayıt kaybolmamalı
+    (env.tmp / "out").write_text("klasör değil, dosya")  # mkdir başarısız olur
+    c = env.make()
+    c.start()
+    c.toggle()
+    c.toggle()
+    env.runner.run_all()
+    wavs = list((env.tmp / "fallback").glob("*.wav"))
+    assert len(wavs) == 1
+    assert wavs[0].with_suffix(".txt").is_file()
+    assert any(t == "Kayıt farklı klasöre kaydedildi" for t, _ in env.listener.messages)
+
+
+def test_wav_write_failure_everywhere_reports_error(env):
+    (env.tmp / "out").write_text("x")
+    (env.tmp / "fallback").write_text("x")
+    c = env.make()
+    c.start()
+    c.toggle()
+    c.toggle()
+    assert c.state.phase is Phase.IDLE
+    assert env.listener.messages[-1][0] == "Bir sorun oluştu"
 
 
 def test_progress_throttled_to_whole_percent(env):

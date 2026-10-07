@@ -24,8 +24,15 @@ class AppPaths:
     logs: Path
     state: Path  # küçük ayar / işaret dosyaları
 
+    @property
+    def recovery(self) -> Path:
+        """Çıktı klasörüne yazılamazsa kayıtların düştüğü yedek klasör."""
+        return self.state / "Kayıtlar"
+
     def ensure(self) -> "AppPaths":
-        for directory in (self.models, self.output, self.logs, self.state):
+        # Çıktı klasörü (Belgeler) burada oluşturulmaz: macOS Belgeler erişimini izne bağlar,
+        # reddedilirse açılış çökmesin. Onu ilk kayıtta Controller oluşturur.
+        for directory in (self.models, self.logs, self.state):
             directory.mkdir(parents=True, exist_ok=True)
         return self
 

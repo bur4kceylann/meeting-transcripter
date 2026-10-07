@@ -30,10 +30,20 @@ def test_frozen_windows_uses_localappdata():
     assert p.logs == Path("C:/Users/mudur/AppData/Local/Transkript/logs")
 
 
-def test_ensure_creates_dirs(tmp_path):
+def test_ensure_creates_app_dirs_but_not_output(tmp_path):
+    # Review #2: çıktı klasörü Belgeler'de; izin reddedilirse açılış çökmesin.
+    # Çıktı klasörünü ilk kayıtta Controller oluşturur (yazılamazsa yedek klasöre düşer).
     p = paths.AppPaths(
         models=tmp_path / "m", output=tmp_path / "o", logs=tmp_path / "l", state=tmp_path / "s"
     )
     assert p.ensure() is p
-    for d in (p.models, p.output, p.logs, p.state):
+    for d in (p.models, p.logs, p.state):
         assert d.is_dir()
+    assert not p.output.exists()
+
+
+def test_recovery_dir_is_inside_state(tmp_path):
+    p = paths.AppPaths(
+        models=tmp_path / "m", output=tmp_path / "o", logs=tmp_path / "l", state=tmp_path / "s"
+    )
+    assert p.recovery == tmp_path / "s" / "Kayıtlar"

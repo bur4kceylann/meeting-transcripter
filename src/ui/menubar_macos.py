@@ -25,7 +25,7 @@ from src.app.model_manager import ModelManager  # noqa: E402
 from src.app.paths import AppPaths, resolve  # noqa: E402
 from src.audio.platform_detect import get_capture_class  # noqa: E402
 from src.ui import macos_system  # noqa: E402
-from src.ui.status_text import status_title, toggle_label  # noqa: E402
+from src.ui.status_text import quit_confirmation, status_title, toggle_label  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +67,7 @@ class TranscriptApp(rumps.App):
             engine_factory=_engine_factory,
             model_manager=ModelManager(paths.models),
             output_dir=paths.output,
+            fallback_dir=paths.recovery,
             listener=self._listener,
             silence_hint=_SILENCE_HINT,
         )
@@ -79,7 +80,7 @@ class TranscriptApp(rumps.App):
             self.retry_item,
             None,
             rumps.MenuItem("Son Transkripti Aç", callback=self._on_open_last),
-            rumps.MenuItem("Transkript Klasörünü Aç", callback=lambda _: macos_system.open_path(paths.output)),
+            rumps.MenuItem("Transkript Klasörünü Aç", callback=self._on_open_dir),
             None,
             self.login_item,
             rumps.MenuItem("Sistem Sesi İznini Aç…", callback=lambda _: macos_system.open_url(_PERMISSION_URL)),
@@ -125,15 +126,27 @@ class TranscriptApp(rumps.App):
         else:
             macos_system.notify("Transkript yok", "Henüz üretilmiş bir transkript bulunamadı.")
 
+    def _on_open_dir(self, _sender) -> None:
+        try:
+            self._paths.output.mkdir(parents=True, exist_ok=True)
+            macos_system.open_path(self._paths.output)
+        except OSError:
+            log.exception("Transkript klasörü açılamadı")
+            macos_system.open_path(self._paths.recovery if self._paths.recovery.exists() else self._paths.state)
+
     def _on_quit(self, _sender) -> None:
-        if self._state.phase is Phase.TRANSCRIBING:
-            answer = rumps.alert(
-                title="Transkript sürüyor",
-                message="Çıkarsan transkript yarıda kalır; ses kaydı klasörde durur. Yine de çıkılsın mı?",
-                ok="Çık",
-                cancel="Vazgeç",
-            )
-            if answer != 1:
+        confirm = quit_confirmation(self._state)
+        if confirm and confirm.stop_button:
+            # rumps.alert: ok=1, cancel=0, other=-1
+            answer = rumps.alert(title=confirm.title, message=confirm.message,
+                                 ok=confirm.stop_button, cancel="Vazgeç", other="Yine de Çık")
+            if answer == 1:
+                self._controller.toggle()  # durdur ve metne çevir; uygulama açık kalır
+                return
+            if answer == 0:
+                return
+        elif confirm:
+            if rumps.alert(title=confirm.title, message=confirm.message, ok="Çık", cancel="Vazgeç") != 1:
                 return
         self._controller.shutdown()
         rumps.quit_application()
@@ -162,9 +175,10 @@ class TranscriptApp(rumps.App):
 
 
 def main() -> None:
-    paths = resolve().ensure()
-    setup_logging(paths.logs)
+    paths = resolve()
+    setup_logging(paths.logs)  # önce log: sonraki her hata kayda geçsin
     log.info("Transkript %s başlıyor (paketli: %s)", __version__, getattr(sys, "frozen", False))
+    paths.ensure()
     TranscriptApp(paths).run()
 
 

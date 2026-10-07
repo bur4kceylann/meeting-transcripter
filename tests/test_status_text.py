@@ -1,5 +1,5 @@
 from src.app.controller import ErrorKind, Phase, State
-from src.ui.status_text import status_title, toggle_label
+from src.ui.status_text import quit_confirmation, status_title, toggle_label
 
 
 def test_titles():
@@ -20,3 +20,15 @@ def test_toggle_labels():
     assert toggle_label(State(Phase.RECORDING, started_at=0)) == "Kaydı Durdur"
     assert toggle_label(State(Phase.TRANSCRIBING, progress=0.1)) == "Transkript üretiliyor…"
     assert toggle_label(State(Phase.DOWNLOADING, progress=0.1)) == "Model indiriliyor…"
+
+
+def test_quit_confirmation_only_while_working():
+    # Review #4: kayıt sürerken de onay sorulmalı; boştayken sorulmamalı
+    assert quit_confirmation(State(Phase.IDLE)) is None
+    assert quit_confirmation(State(Phase.DOWNLOADING, progress=0.2)) is None
+    recording = quit_confirmation(State(Phase.RECORDING, started_at=0))
+    assert recording.title == "Kayıt sürüyor"
+    assert recording.stop_button == "Durdur ve Metne Çevir"
+    transcribing = quit_confirmation(State(Phase.TRANSCRIBING, progress=0.4))
+    assert transcribing.title == "Transkript sürüyor"
+    assert transcribing.stop_button is None

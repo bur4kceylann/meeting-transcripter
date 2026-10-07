@@ -85,6 +85,7 @@ class Controller:
         model_manager,
         output_dir: Path,
         listener: Listener,
+        fallback_dir: Path | None = None,
         silence_hint: str = "",
         run_in_background: Callable[[Callable[[], None]], None] = _run_in_thread,
         clock: Callable[[], float] = time.monotonic,
@@ -94,6 +95,7 @@ class Controller:
         self._engine_factory = engine_factory
         self._models = model_manager
         self._output_dir = output_dir
+        self._fallback_dir = fallback_dir  # çıktı klasörüne yazılamazsa (izin / disk)
         self._listener = listener
         self._silence_hint = silence_hint
         self._run = run_in_background
@@ -101,8 +103,9 @@ class Controller:
         self._now = now
         self._state = State(Phase.NEEDS_MODEL)
         self._capture: Capture | None = None
-        self._engine: Engine | None = None
         self._last_transcript: Path | None = None
+        # Kayıt başlat/durdur hem ana thread'den (menü) hem yakalama kesintisinden gelebilir
+        self._lock = threading.RLock()
 
     @property
     def state(self) -> State:
@@ -160,6 +163,10 @@ class Controller:
     # --- kayıt ---
 
     def toggle(self) -> None:
+        with self._lock:
+            self._toggle()
+
+    def _toggle(self) -> None:
         phase = self._state.phase
         if phase is Phase.IDLE:
             self._start_recording()
@@ -186,8 +193,19 @@ class Controller:
             self._message("Kayıt başlatılamadı", f"Bir sorun oluştu. {_LOG_HINT}")
             return
         self._capture = capture
+        if hasattr(capture, "on_interrupted"):
+            capture.on_interrupted = lambda: self._run(lambda: self._handle_interruption(capture))
         log.info("Kayıt başladı")
         self._set(State(Phase.RECORDING, started_at=self._clock()))
+
+    def _handle_interruption(self, capture: Capture) -> None:
+        with self._lock:
+            if self._state.phase is not Phase.RECORDING or self._capture is not capture:
+                return  # kullanıcı bu arada zaten durdurdu
+            log.warning("Yakalama kesildi; o ana kadarki kayıt metne çevriliyor")
+            self._message("Kayıt kesildi",
+                          "Ses kaydı beklenmedik şekilde durdu. O ana kadar kaydedilen kısım metne çevriliyor.")
+            self._stop_recording()
 
     def _stop_recording(self) -> None:
         try:
@@ -206,17 +224,31 @@ class Controller:
         """Kaydı durdurur ve WAV'ı yazar. Sessizse None döner ve IDLE'a geçer."""
         capture, self._capture = self._capture, None
         audio = capture.stop()
-        if audio.size == 0 or float(np.abs(audio).max()) < SILENCE_PEAK:
+        # max/-min: uzun kayıtta np.abs ile ikinci bir tam kopya oluşturmadan tepe değeri
+        peak = float(max(audio.max(), -audio.min())) if audio.size else 0.0
+        if peak < SILENCE_PEAK:
             log.info("Sessiz kayıt (%d örnek)", audio.size)
             self._set(State(Phase.IDLE))
             body = "Kayıt süresince bilgisayardan ses gelmedi."
             self._message("Kayıtta ses algılanmadı", f"{body} {self._silence_hint}".strip())
             return None
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-        wav = self._output_dir / f"kayit_{self._now():%Y%m%d_%H%M%S}.wav"
-        sf.write(wav, audio, capture.samplerate)
-        log.info("Kayıt yazıldı: %s (%.1f sn)", wav, audio.size / capture.samplerate)
-        return wav
+        name = f"kayit_{self._now():%Y%m%d_%H%M%S}.wav"
+        for directory in (self._output_dir, self._fallback_dir):
+            if directory is None:
+                continue
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                wav = directory / name
+                sf.write(wav, audio, capture.samplerate)
+            except (OSError, RuntimeError):  # soundfile yazma hataları RuntimeError türevi
+                log.exception("Kayıt %s klasörüne yazılamadı", directory)
+                continue
+            log.info("Kayıt yazıldı: %s (%.1f sn)", wav, audio.size / capture.samplerate)
+            if directory != self._output_dir:
+                self._message("Kayıt farklı klasöre kaydedildi",
+                              f"Belgeler > Transkriptler'e yazılamadı. Kayıt ve transkript burada: {directory}")
+            return wav
+        raise OSError("Kayıt hiçbir klasöre yazılamadı")
 
     def _transcribe_worker(self, wav: Path) -> None:
         last_pct = 0
@@ -229,9 +261,10 @@ class Controller:
                 self._set(State(Phase.TRANSCRIBING, progress=p))
 
         try:
-            if self._engine is None:
-                self._engine = self._engine_factory(self._models.model_dir)
-            result = self._engine.transcribe(wav, on_progress=progress)
+            # Model her transkriptte yüklenip sonra bırakılır: ~1.5 GB oturum boyunca bellekte kalmasın
+            engine = self._engine_factory(self._models.model_dir)
+            result = engine.transcribe(wav, on_progress=progress)
+            del engine
             if not result.segments:
                 self._message("Konuşma algılanamadı", "Kayıtta metne çevrilecek konuşma bulunamadı.")
                 return
