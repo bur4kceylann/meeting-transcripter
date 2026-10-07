@@ -43,3 +43,22 @@ def test_captures_system_audio():
     audio, samplerate = record_sentence()
     assert audio.size / samplerate > 2.0
     assert float(np.abs(audio).max()) > 0.01
+
+
+def test_records_and_transcribes_turkish_sentence(tmp_path):
+    import soundfile as sf
+
+    from src.app.model_manager import ModelManager
+    from src.app.paths import resolve
+    from src.transcribe.whisper_engine import WhisperEngine
+
+    manager = ModelManager(resolve(frozen=False).models)
+    if not manager.is_ready():
+        pytest.skip("models/faster-whisper-medium hazır değil")
+    audio, samplerate = record_sentence()
+    wav = tmp_path / "kayit.wav"
+    sf.write(wav, audio, samplerate)
+    result = WhisperEngine(model_size=str(manager.model_dir)).transcribe(wav)
+    text = result.text.lower()
+    assert "toplantı" in text
+    assert "bütçe" in text
