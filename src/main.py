@@ -21,6 +21,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from src.app.model_manager import ModelManager  # noqa: E402
+from src.app.paths import resolve  # noqa: E402
 from src.output.writer import write_srt, write_txt  # noqa: E402
 from src.transcribe.whisper_engine import WhisperEngine  # noqa: E402
 
@@ -56,7 +58,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default=str(_PROJECT_ROOT / "output"),
+        default=str(resolve().output),
         help="Çıktı klasörü (varsayılan: output/)",
     )
     return parser.parse_args()
@@ -66,7 +68,7 @@ def _record_system_audio(output_dir: Path) -> Path:
     """Sistem sesini Ctrl+C'ye kadar kaydeder, WAV yolunu döndürür."""
     import soundfile as sf
 
-    from src.audio.platform_detect import get_capture_class
+    from src.audio.platform_detect import CapturePermissionError, get_capture_class
 
     # Arka planda başlatılsa bile (shell SIGINT'i yok saydırır) Ctrl+C ve
     # SIGTERM ile temiz durdurma çalışsın: ikisi de KeyboardInterrupt üretir.
@@ -77,11 +79,17 @@ def _record_system_audio(output_dir: Path) -> Path:
     signal.signal(signal.SIGTERM, _stop_signal)
 
     capture = get_capture_class()()
+    try:
+        capture.start()
+    except CapturePermissionError:
+        sys.exit(
+            "Sistem sesi kaydı izni yok. Ayarlar > Gizlilik ve Güvenlik > "
+            "Sistem Sesi Kaydı'ndan terminal uygulamana izin ver."
+        )
     print(f"Ses kaynağı: {capture.device_hint()}")
     print("Kayıt başladı. Durdurmak için Ctrl+C'ye bas.\n")
 
     is_tty = sys.stdout.isatty()
-    capture.start()
     started = time.monotonic()
     try:
         while True:
@@ -98,14 +106,14 @@ def _record_system_audio(output_dir: Path) -> Path:
     audio = capture.stop()
 
     if audio.size == 0:
-        sys.exit("Hiç ses yakalanamadı. Ses çıkışının doğru cihaza yönlendirildiğinden emin ol.")
+        sys.exit("Hiç ses yakalanamadı.")
 
     duration = audio.size / capture.samplerate
     peak = float(abs(audio).max())
     if peak < 1e-4:
         print(
-            "[uyarı] Kayıt tamamen sessiz görünüyor. macOS'ta sistem çıkışının "
-            "BlackHole içeren Multi-Output Device'a yönlendirildiğini kontrol et."
+            "[uyarı] Kayıt tamamen sessiz görünüyor. macOS'ta Ayarlar > Gizlilik ve "
+            "Güvenlik > Sistem Sesi Kaydı iznini kontrol et."
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -126,8 +134,13 @@ def main() -> None:
     else:
         audio_path = _record_system_audio(output_dir)
 
+    model = args.model
+    if model == "medium":
+        manager = ModelManager(resolve().models)
+        if manager.is_ready():
+            model = str(manager.model_dir)
     print(f"\nModel yükleniyor: {args.model} (ilk seferde indirilir, sonrası offline)")
-    engine = WhisperEngine(model_size=args.model, compute_type=args.compute_type)
+    engine = WhisperEngine(model_size=model, compute_type=args.compute_type)
 
     print("Transkript ediliyor...")
     t0 = time.monotonic()

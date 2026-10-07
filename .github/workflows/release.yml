@@ -1,0 +1,85 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # etiketin main üzerinde olduğunu doğrulamak için
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-dev.txt
+
+      - name: Etiket main üzerindeki bir commit'e mi atılmış
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Etiket sürüm numarasıyla eşleşiyor mu
+        run: test "v$(python -c 'from src import __version__; print(__version__)')" = "$GITHUB_REF_NAME"
+
+      - run: pytest
+
+      - name: İmza sertifikasını geçici keychain'e al
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+
+      - name: Notarization anahtarı
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+        run: echo "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary.p8"
+
+      - name: Self-test modeli (tiny)
+        run: |
+          python -c "
+          from pathlib import Path
+          from src.app.model_manager import ModelManager
+          m = ModelManager(Path('build/models'), repo='Systran/faster-whisper-tiny')
+          m.download(lambda p: None)
+          print(m.model_dir)
+          "
+
+      - name: Derle, imzala, notarize et
+        env:
+          PYTHON: python
+          NOTARY_KEY_PATH: ${{ runner.temp }}/notary.p8
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+          SELF_TEST_MODEL: build/models/faster-whisper-tiny
+        run: bash packaging/build_macos.sh
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Yeniden çalıştırmada release zaten varsa yalnızca dosyayı güncelle
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/Transkript-*.dmg --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/Transkript-*.dmg \
+              --title "Transkript $GITHUB_REF_NAME" \
+              --notes-file packaging/release-notes.md
+          fi
+
+      - name: Geçici anahtarları temizle
+        if: always()
+        run: rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/cert.p12"

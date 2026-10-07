@@ -12,6 +12,7 @@ models/
 *.txt
 !README.md
 !requirements.txt
+!requirements-dev.txt
 
 # Python
 __pycache__/
@@ -21,9 +22,12 @@ venv/
 *.egg-info/
 .pytest_cache/
 
-# Derlenen yardımcılar ve çalışma zamanı dosyaları
-tools/audio_route
-.toggle_trigger
+# Derlenen yardımcılar, paketleme ve çalışma zamanı dosyaları
+tools/audio_tap
+/build/
+/dist/
+/logs/
+/.state/
 
 # Ortam değişkenleri (HF_TOKEN gibi sırlar)
 .env

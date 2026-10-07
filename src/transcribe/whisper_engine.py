@@ -7,6 +7,7 @@ zaman damgalı segment listesi döndürür. Model dosyaları ilk kullanımda
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,17 +54,29 @@ class WhisperEngine:
             download_root=str(_MODELS_DIR),
         )
 
-    def transcribe(self, audio_path: str | Path, language: str | None = None) -> TranscriptResult:
+    def transcribe(
+        self,
+        audio_path: str | Path,
+        language: str | None = None,
+        on_progress: Callable[[float], None] | None = None,
+    ) -> TranscriptResult:
         """Ses dosyasını transkript eder.
 
         language None ise Whisper dili otomatik algılar (Türkçe dahil).
+        on_progress verilirse 0.0-1.0 arası ilerleme bildirilir (segment sonu / ses süresi).
         """
         segments_iter, info = self._model.transcribe(
             str(audio_path),
             language=language,
             vad_filter=True,  # sessiz bölümleri atla (toplantılarda uzun boşluklar olur)
         )
-        segments = [Segment(start=s.start, end=s.end, text=s.text) for s in segments_iter]
+        segments = []
+        for s in segments_iter:
+            segments.append(Segment(start=s.start, end=s.end, text=s.text))
+            if on_progress and info.duration:
+                on_progress(min(s.end / info.duration, 1.0))
+        if on_progress:
+            on_progress(1.0)
         return TranscriptResult(
             segments=segments,
             language=info.language,
