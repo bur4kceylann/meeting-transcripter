@@ -1,6 +1,6 @@
 # transcript-tool
 
-Capture your computer's **system/output audio** (not the microphone — the
+Capture your computer's **system/output audio** (not the microphone; the
 loopback signal from meetings, calls, and videos) and transcribe it to text
 **fully offline**, with no cloud API and no cost. Point it at a Zoom/Meet/Teams
 call, a YouTube video, or any other audio playing on your machine, and get a
@@ -10,68 +10,66 @@ macOS, and Linux.
 
 ---
 
-Bilgisayarın çıkış sesini (sistem/hoparlör sesi — mikrofon değil) yakalayıp
-**yerel olarak** metne çeviren, platformdan bağımsız bir CLI aracı.
+Bilgisayarın çıkış sesini (sistem/hoparlör sesi, mikrofon değil) yakalayıp
+**yerel olarak** metne çeviren, platformdan bağımsız bir araç.
 Tactiq benzeri, ama sadece transkript odaklı, offline ve ücretsiz.
+
+## Kurulum (son kullanıcı, macOS)
+
+1. [Releases](https://github.com/bur4kceylann/meeting-transcripter/releases/latest)
+   sayfasından `Transkript-x.y.z.dmg` dosyasını indir.
+2. Aç, **Transkript**'i **Applications** klasörüne sürükle.
+3. Transkript'i aç. Menü çubuğunda model bir kereliğine indirilir (~1.5 GB).
+4. 🎙 → **Kaydı Başlat**. İlk kayıtta "sistem sesi kaydı" iznine **İzin Ver**.
+
+Gereksinim: Apple Silicon Mac, macOS 14.4 veya daha yeni.
+Transkriptler `Belgeler/Transkriptler` klasörüne yazılır.
 
 ## Özellikler
 
 - Windows / macOS / Linux desteği
 - Sistem sesini (loopback) yakalama
-- faster-whisper ile yerel transkripsiyon (API yok, internet gerektirmez)
+- faster-whisper ile yerel transkripsiyon (API yok, model indirildikten sonra internet gerekmez)
 - `.txt` ve zaman damgalı `.srt` çıktısı
 - Çok dilli (Türkçe dahil, dil otomatik algılanır)
 
-## Gereksinimler
+## Gereksinimler (geliştirici)
 
 - Python 3.10+
 - Platforma göre ses altyapısı:
   - **Windows:** ek kurulum gerekmez (WASAPI loopback)
-  - **macOS:** [BlackHole](https://github.com/ExistentialAudio/BlackHole) sanal ses sürücüsü
+  - **macOS:** 14.4+ (Core Audio Process Tap; ek sürücü gerekmez)
   - **Linux:** PulseAudio veya PipeWire (çoğu dağıtımda hazır gelir)
 
-## Kurulum
+## Geliştirici Kurulumu
 
 ```bash
-git clone <repo-url>
-cd transcript-tool
+git clone https://github.com/bur4kceylann/meeting-transcripter.git
+cd meeting-transcripter
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
-macOS'ta menü çubuğu uygulaması, ses çıkışını yönlendirmek için küçük bir Swift
-yardımcısına ihtiyaç duyar (derlenmiş hali git'e dahil değildir, bir kere
-derlemen yeterli):
+macOS'ta sistem sesi, küçük bir Swift yardımcısıyla yakalanır (derlenmiş hali
+git'e dahil değildir):
 
 ```bash
-swiftc -O tools/audio_route.swift -o tools/audio_route
+swiftc -O -target arm64-apple-macos14.4 tools/audio_tap.swift -o tools/audio_tap
 ```
 
-## Kullanım (macOS — menü çubuğu uygulaması)
+İlk kayıtta macOS, terminal uygulaman için "sistem sesi kaydı" izni ister.
+
+## Kullanım (macOS menü çubuğu, kaynaktan)
 
 ```bash
-bash tools/toggle.sh    # uygulamayı başlatır ve kaydı açar
+.venv/bin/python src/ui/menubar_macos.py
 ```
 
-- Menü çubuğundaki **🎙** simgesine tıkla → kayıt başlar (🔴 + süre görünür)
-- Tekrar tıkla → kayıt durur, transkript üretilir, bitince `.txt` otomatik açılır
-- Kayıt başlarken ses çıkışı otomatik "Hoparlör + BlackHole"a alınır,
-  kayıt bitince eski cihaza geri döner
-- Klavye kısayolu: macOS **Kısayollar** uygulamasında `tools/toggle.sh`'ı
-  çalıştıran bir kısayol oluşturup tuş ata (aşağıda "Klavye Kısayolu")
-
-### Klavye Kısayolu Atama (bir kere)
-
-1. **Kısayollar** (Shortcuts) uygulamasını aç → **+** ile yeni kısayol
-2. "Kabuk Betiği Çalıştır" (Run Shell Script) eylemini ekle, içine yaz:
-   `bash <proje-yolu>/tools/toggle.sh`
-3. Kısayola isim ver (örn. "Transkript"), bilgi panelinden
-   **Klavye Kısayolu Ekle** ile bir tuş ata (örn. ⌥⌘R)
-4. İlk çalıştırmada Kısayollar betik izni isterse
-   Ayarlar → Gelişmiş → "Betiklerin çalıştırılmasına izin ver"i aç
-
-Aynı tuş hem başlatır hem durdurur; uygulama kapalıysa açar ve kaydı başlatır.
+- Menü çubuğundaki **🎙** → **Kaydı Başlat**: kayıt başlar (🔴 + süre görünür).
+- **Kaydı Durdur**: transkript üretilir (⏳ + yüzde), bitince `.txt` otomatik açılır.
+- Kaynaktan çalışırken model `models/faster-whisper-medium`, çıktılar `output/`,
+  loglar `logs/` altındadır.
 
 ## Kullanım (CLI)
 
@@ -80,15 +78,21 @@ python src/main.py                    # kaydı başlat, Ctrl+C ile durdur
 # durunca transkript üretilir ve output/ altına yazılır (.wav + .txt + .srt)
 
 python src/main.py toplanti.wav       # var olan bir ses dosyasını transkript et
-python src/main.py --model medium     # daha büyük/doğru model (tiny/base/small/medium/large-v3)
+python src/main.py --model large-v3   # farklı model (tiny/base/small/medium/large-v3)
 python src/main.py --language tr      # dili elle sabitle (varsayılan: otomatik algıla)
 ```
 
-## Notlar
+## Test
 
-- İlk çalıştırmada Whisper modeli otomatik indirilir (`models/` altına).
-- macOS'ta sistem sesini yakalamak için ses çıkışını BlackHole'a yönlendirmen gerekir
-  (veya Multi-Output Device oluştur ki hem duyabilesin hem kaydedebilesin).
+```bash
+pytest           # birim testleri
+pytest -m e2e    # gerçek ses yakalama ve model gerektiren testler (macOS, hoparlörden ses çalar)
+```
+
+## Paketleme ve Sürüm
+
+İmzalı ve notarize edilmiş `.dmg` üretimi ve GitHub Release süreci için
+[docs/release.md](docs/release.md).
 
 ## Lisans
 

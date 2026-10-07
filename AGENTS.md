@@ -23,7 +23,8 @@ Sadece transkript çıktısı isteniyor. **Özet / LLM / bulut API YOK.** Maliye
 ## Hedef Platformlar ve Ses Yakalama Yöntemi
 
 - **Windows** → WASAPI loopback (native, ek sürücü gerekmez). `soundcard` kütüphanesi.
-- **macOS** → BlackHole sanal ses sürücüsü (kullanıcının kurması gerekir). `sounddevice`.
+- **macOS** → Core Audio Process Tap (macOS 14.4+, sürücü gerekmez). `tools/audio_tap` (Swift)
+  yardımcısı stdout'a PCM yazar, `capture_macos.py` okur.
 - **Linux** → PulseAudio / PipeWire "monitor" kaynağı. `sounddevice`.
 
 `src/audio/platform_detect.py` çalışma zamanında OS'u algılayıp doğru modülü seçer.
@@ -32,7 +33,7 @@ Sadece transkript çıktısı isteniyor. **Özet / LLM / bulut API YOK.** Maliye
 
 - Dil: **Python 3.10+**
 - STT: **faster-whisper** (CTranslate2 tabanlı, whisper.cpp'nin hızlı Python sürümü)
-- Ses: **soundcard** (Windows loopback) + **sounddevice** (macOS/Linux)
+- Ses: **soundcard** (Windows loopback) + **sounddevice** (Linux) + **tools/audio_tap** (macOS)
 - Çıktı: `.txt` ve zaman damgalı `.srt`
 
 ## Klasör Yapısı
@@ -41,26 +42,30 @@ Sadece transkript çıktısı isteniyor. **Özet / LLM / bulut API YOK.** Maliye
 transcript-tool/
 ├── AGENTS.md
 ├── README.md
-├── requirements.txt
-├── .gitignore
+├── requirements.txt / requirements-dev.txt
 ├── src/
 │   ├── main.py                  # CLI giriş noktası
-│   ├── menubar_macos.py         # macOS menü çubuğu uygulaması (rumps)
+│   ├── app/                     # OS bilmeyen uygulama çekirdeği
+│   │   ├── controller.py        # durum makinesi: kayıt → transkript → dosya
+│   │   ├── model_manager.py     # model hazır mı / ilerlemeli indirme
+│   │   ├── paths.py             # paketli / kaynak klasörleri
+│   │   └── logging_setup.py
+│   ├── ui/                      # ince platform kabukları
+│   │   ├── menubar_macos.py     # macOS menü çubuğu (rumps)
+│   │   ├── macos_system.py      # bildirim, oturum açılışında başlatma
+│   │   └── status_text.py       # durum → menü metinleri
 │   ├── audio/
-│   │   ├── __init__.py
 │   │   ├── platform_detect.py   # OS algıla, doğru capture modülünü döndür
 │   │   ├── capture_windows.py   # WASAPI loopback
-│   │   ├── capture_macos.py     # BlackHole
+│   │   ├── capture_macos.py     # tools/audio_tap'ten PCM okur
 │   │   └── capture_linux.py     # PulseAudio monitor
 │   ├── transcribe/
-│   │   ├── __init__.py
 │   │   └── whisper_engine.py    # faster-whisper sarmalayıcı
 │   └── output/
-│       ├── __init__.py
 │       └── writer.py            # .txt / .srt yazma
 ├── tools/
-│   ├── audio_route.swift        # ses çıkışı yönlendirme yardımcısı (CoreAudio)
-│   └── toggle.sh                # kayıt aç/kapat tetikleyicisi (klavye kısayolu bunu çağırır)
+│   └── audio_tap.swift          # Core Audio Process Tap yardımcısı
+├── packaging/                   # PyInstaller spec, imzalama/DMG/notarization betiği
 ├── models/                      # (gitignore) indirilen Whisper modelleri
 └── tests/
 ```
@@ -86,3 +91,5 @@ tek seferde transkript edilir. Gerçek zamanlı (canlı akan) mod v2'ye bırakı
 Her modülü yazdıktan sonra küçük bir manuel testle çalıştığını doğrula
 (örn. 10 saniye sistem sesi yakala → dosyaya WAV yaz → oynat → doğru mu?).
 Bir sonraki modüle geçmeden önce mevcut modülün çalıştığından emin ol.
+
+Birim testleri: `pytest`. Gerçek ses/model gerektirenler: `pytest -m e2e`. Dağıtım: `docs/release.md`.
