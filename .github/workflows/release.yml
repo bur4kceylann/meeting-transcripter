@@ -12,10 +12,15 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # etiketin main üzerinde olduğunu doğrulamak için
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: pip install -r requirements-dev.txt
+
+      - name: Etiket main üzerindeki bir commit'e mi atılmış
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Etiket sürüm numarasıyla eşleşiyor mu
         run: test "v$(python -c 'from src import __version__; print(__version__)')" = "$GITHUB_REF_NAME"
@@ -66,6 +71,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/Transkript-*.dmg \
-            --title "Transkript $GITHUB_REF_NAME" \
-            --notes-file packaging/release-notes.md
+          # Yeniden çalıştırmada release zaten varsa yalnızca dosyayı güncelle
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/Transkript-*.dmg --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/Transkript-*.dmg \
+              --title "Transkript $GITHUB_REF_NAME" \
+              --notes-file packaging/release-notes.md
+          fi
+
+      - name: Geçici anahtarları temizle
+        if: always()
+        run: rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/cert.p12"
