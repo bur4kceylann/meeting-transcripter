@@ -21,6 +21,10 @@ class UnsupportedPlatformError(RuntimeError):
     pass
 
 
+class CapturePermissionError(RuntimeError):
+    """İşletim sistemi sistem sesi yakalama iznini vermedi."""
+
+
 def get_capture_class():
     """Çalışılan OS'a uygun Capture sınıfını döndürür."""
     system = platform.system()

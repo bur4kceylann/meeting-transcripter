@@ -1,78 +1,99 @@
-"""macOS sistem sesi yakalama — BlackHole sanal ses sürücüsü üzerinden.
+"""macOS sistem sesi yakalama: Core Audio Process Tap (macOS 14.4+, sürücü gerekmez).
 
-BlackHole, sistem çıkışına gönderilen sesi bir giriş cihazı olarak geri sunar.
-Kullanıcının sesi hem duyup hem kaydedebilmesi için macOS'ta bir
-"Multi-Output Device" (BlackHole + hoparlör) oluşturup çıkışı ona yönlendirmesi
-gerekir. Kurulum: https://github.com/ExistentialAudio/BlackHole
+Ses, `audio_tap` yardımcısı (tools/audio_tap.swift) tarafından yakalanır ve
+stdout'undan ham float32 interleaved PCM olarak okunur. Kullanıcının ses
+çıkışı değişmez. İlk kayıtta macOS "sistem sesi kaydı" izni ister.
+
+Bellek için ses okunurken mono'ya indirilir (1 saatlik 48 kHz kayıt ~690 MB).
 """
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
 import numpy as np
-import sounddevice as sd
 
-_INSTALL_HELP = (
-    "BlackHole ses sürücüsü bulunamadı.\n"
-    "Kurulum:\n"
-    "  1. brew install blackhole-2ch   (veya https://existential.audio/blackhole/)\n"
-    "  2. macOS 'Audio MIDI Setup' uygulamasında bir Multi-Output Device oluştur\n"
-    "     (BlackHole 2ch + kendi hoparlörün) ve sistem ses çıkışını ona yönlendir.\n"
-    "  3. Bu aracı yeniden çalıştır."
-)
+from .platform_detect import CapturePermissionError
+
+_PERMISSION_EXIT_CODE = 77
+_READ_SIZE = 64 * 1024
 
 
-class DeviceNotFoundError(RuntimeError):
-    pass
-
-
-def _find_blackhole_device() -> int:
-    for idx, dev in enumerate(sd.query_devices()):
-        if "blackhole" in dev["name"].lower() and dev["max_input_channels"] > 0:
-            return idx
-    raise DeviceNotFoundError(_INSTALL_HELP)
+def _default_helper() -> Path:
+    if getattr(sys, "frozen", False):  # PyInstaller paketi: Contents/Frameworks
+        return Path(sys._MEIPASS) / "audio_tap"
+    return Path(__file__).resolve().parents[2] / "tools" / "audio_tap"
 
 
 class MacOSCapture:
-    def __init__(self) -> None:
-        self._device_index = _find_blackhole_device()
-        info = sd.query_devices(self._device_index)
-        self._device_name = info["name"]
-        self.samplerate = int(info["default_samplerate"])
-        self.channels = min(2, info["max_input_channels"])
+    def __init__(self, helper: str | Path | None = None) -> None:
+        self._helper = Path(helper) if helper else _default_helper()
+        if not self._helper.exists():
+            raise FileNotFoundError(
+                f"audio_tap bulunamadı: {self._helper}\n"
+                "Derle: swiftc -O -target arm64-apple-macos14.4 tools/audio_tap.swift -o tools/audio_tap"
+            )
+        self.samplerate = 48_000
+        self.channels = 2
+        self._proc: subprocess.Popen | None = None
+        self._reader: threading.Thread | None = None
         self._chunks: list[np.ndarray] = []
-        self._stream: sd.InputStream | None = None
 
     def device_hint(self) -> str:
-        return f"{self._device_name} @ {self.samplerate} Hz, {self.channels} kanal"
-
-    def _callback(self, indata, frames, time_info, status) -> None:
-        if status:
-            # Overflow vb. durumlarda kaydı kesmeyip devam ediyoruz.
-            print(f"[uyarı] ses akışı durumu: {status}")
-        self._chunks.append(indata.copy())
+        return f"Sistem sesi (Core Audio Process Tap) @ {self.samplerate} Hz, {self.channels} kanal"
 
     def start(self) -> None:
         self._chunks = []
-        self._stream = sd.InputStream(
-            device=self._device_index,
-            channels=self.channels,
-            samplerate=self.samplerate,
-            dtype="float32",
-            callback=self._callback,
+        proc = subprocess.Popen(
+            [str(self._helper)],
+            stdin=subprocess.PIPE,  # açık tutulur; kapanınca yardımcı kendini temizler
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        self._stream.start()
+        header = proc.stderr.readline()
+        try:
+            fmt = json.loads(header)
+        except ValueError:
+            code = proc.wait(timeout=5)
+            message = (header + proc.stderr.read()).decode(errors="replace").strip()
+            if code == _PERMISSION_EXIT_CODE:
+                raise CapturePermissionError(message or "sistem sesi izni verilmedi") from None
+            raise RuntimeError(f"audio_tap başlatılamadı (kod {code}): {message}") from None
+        self.samplerate = int(fmt["samplerate"])
+        self.channels = int(fmt["channels"])
+        self._proc = proc
+        self._reader = threading.Thread(target=self._read_loop, args=(proc,), daemon=True)
+        self._reader.start()
+
+    def _read_loop(self, proc: subprocess.Popen) -> None:
+        frame_bytes = 4 * self.channels
+        pending = b""
+        while chunk := proc.stdout.read1(_READ_SIZE):
+            data = pending + chunk
+            usable = len(data) - len(data) % frame_bytes
+            pending = data[usable:]
+            if usable:
+                frames = np.frombuffer(data[:usable], dtype="<f4").reshape(-1, self.channels)
+                self._chunks.append(frames.mean(axis=1, dtype=np.float32))
 
     def stop(self) -> np.ndarray:
-        if self._stream is None:
+        if self._proc is None:
             raise RuntimeError("start() çağrılmadan stop() çağrıldı")
-        self._stream.stop()
-        self._stream.close()
-        self._stream = None
-        if not self._chunks:
+        proc, self._proc = self._proc, None
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        self._reader.join(timeout=5)
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            stream.close()
+        chunks, self._chunks = self._chunks, []
+        if not chunks:
             return np.zeros(0, dtype=np.float32)
-        audio = np.concatenate(self._chunks, axis=0)
-        self._chunks = []
-        # Whisper mono bekler; kanalları ortalayarak mono'ya indir.
-        if audio.ndim == 2:
-            audio = audio.mean(axis=1)
-        return audio.astype(np.float32)
+        return np.concatenate(chunks).astype(np.float32, copy=False)
