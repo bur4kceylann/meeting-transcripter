@@ -1,0 +1,19 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-dev.txt
+      - name: audio_tap derlenebiliyor mu
+        run: swiftc -O -target arm64-apple-macos14.4 tools/audio_tap.swift -o tools/audio_tap
+      - run: pytest
