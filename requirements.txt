@@ -1,9 +1,13 @@
 # Yerel konuşma-metin (offline, CTranslate2 tabanlı)
-faster-whisper>=1.0.0
+faster-whisper>=1.1.0
+
+# Model indirme (ilk açılışta, ilerleme göstererek)
+httpx>=0.27
 
 # Ses yakalama
-sounddevice>=0.4.6        # macOS / Linux loopback (ve genel ses I/O)
-soundcard>=0.4.3          # Windows WASAPI loopback
+# macOS: tools/audio_tap (Core Audio Process Tap), ek Python paketi gerekmez
+sounddevice>=0.4.6 ; sys_platform == "linux"     # PulseAudio / PipeWire monitor
+soundcard>=0.4.3 ; sys_platform == "win32"       # WASAPI loopback
 
 # Ses verisi işleme / WAV yazma
 numpy>=1.24
@@ -11,6 +15,5 @@ soundfile>=0.12.1
 
 # macOS menü çubuğu uygulaması
 rumps>=0.4.0 ; sys_platform == "darwin"
-
-# (opsiyonel) CLI güzelleştirme
-# rich>=13.0
+pyobjc-framework-ServiceManagement>=10 ; sys_platform == "darwin"
+pyobjc-framework-UserNotifications>=10 ; sys_platform == "darwin"
